@@ -27,6 +27,27 @@ dependencies {
 
     // Meteor
     modImplementation "meteordevelopment:meteor-client:${project.minecraft_version}-SNAPSHOT"
+
+    // Dev runtime mod: Baritone (local jar, not bundled)
+    // Preferred: baritone-fabric-1.14.0.jar, Fallback: baritone-api-fabric-1.14.0.jar (+ nether-pathfinder)
+    File baritoneFull = file('libs/baritone-fabric-1.14.0.jar')
+    File baritoneApi = file('libs/baritone-api-fabric-1.14.0.jar')
+    File netherPathfinder = file('libs/nether-pathfinder-1.4.1.jar')
+
+    if (baritoneFull.exists()) {
+        modLocalRuntime files(baritoneFull)
+        logger.lifecycle("[dev] Using Baritone full fabric jar: ${baritoneFull.name}")
+    } else if (baritoneApi.exists()) {
+        modLocalRuntime files(baritoneApi)
+        if (netherPathfinder.exists()) {
+            modLocalRuntime files(netherPathfinder)
+            logger.lifecycle("[dev] Using Baritone API + Nether Pathfinder: ${baritoneApi.name}, ${netherPathfinder.name}")
+        } else {
+            logger.warn("[dev] Using Baritone API jar without nether-pathfinder; if you see NoClassDefFoundError for dev.babbaj.pathfinder, extract it from the API jar to libs/nether-pathfinder-1.4.1.jar")
+        }
+    } else {
+        logger.lifecycle("[dev] Baritone jar not found in libs/. Expected baritone-fabric-1.14.0.jar or baritone-api-fabric-1.14.0.jar")
+    }
 }
 
 processResources {
