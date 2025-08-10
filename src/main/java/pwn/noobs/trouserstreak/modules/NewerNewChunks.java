@@ -1299,16 +1299,10 @@ public class NewerNewChunks extends Module {
         if (mc.world == null) return;
         int cx = cp.getCenterX();
         int cz = cp.getCenterZ();
-        int y;
-        if (pathingMode.get() == PathingMode.Elytra) {
-            // Aim high to encourage elytra traversal; enable normal path fallback if needed
-            y = Math.min(300, getTopYAt(cx, cz) + 32);
-        } else {
-            y = getTopYAt(cx, cz);
-        }
-        BlockPos goalPos = new BlockPos(cx, y, cz);
-        logFollow("Setting Baritone goal to (" + goalPos.getX() + "," + goalPos.getY() + "," + goalPos.getZ() + ") via " + pathingMode.get() + ".");
-        try { baritoneSetGoal(goalPos); } catch (Throwable t) { logFollow("Failed to set goal: " + t.getClass().getSimpleName() + (t.getMessage() != null ? (" - " + t.getMessage()) : "")); }
+        // Use GoalXZ only to ignore Y axis completely
+        logFollow("Setting Baritone GoalXZ to (" + cx + "," + cz + ")");
+        try { baritoneSetGoalXZ(cx, cz); }
+        catch (Throwable t) { logFollow("Failed to set GoalXZ: " + t.getClass().getSimpleName() + (t.getMessage() != null ? (" - " + t.getMessage()) : "")); }
     }
 
     private int getTopYAt(int x, int z) {
@@ -1398,59 +1392,26 @@ public class NewerNewChunks extends Module {
         } catch (Throwable ignored) {}
     }
 
-    private void baritoneSetGoal(BlockPos goalPos) throws Exception {
+    private void baritoneSetGoalXZ(int x, int z) throws Exception {
         Class<?> api = Class.forName("baritone.api.BaritoneAPI");
         Object provider = api.getMethod("getProvider").invoke(null);
         Object baritone = provider.getClass().getMethod("getPrimaryBaritone").invoke(provider);
         if (baritone == null) return;
 
-        // Use CustomGoalProcess per API; do not fall back to PathingBehavior for goal-setting
-        Object goalProcess;
-        try {
-            goalProcess = baritone.getClass().getMethod("getCustomGoalProcess").invoke(baritone);
-            logFollow("Using CustomGoalProcess.");
-        } catch (NoSuchMethodException e) {
-            logFollow("Baritone getCustomGoalProcess() not found; cannot set goals via IPathingBehavior per API.");
-            return;
-        }
-
-        // Support both Baritone interface names: Goal (modern) and IGoal (older)
+        Object goalProcess = baritone.getClass().getMethod("getCustomGoalProcess").invoke(baritone);
+        // Support Goal and IGoal
         Class<?> goalIface;
-        try {
-            goalIface = Class.forName("baritone.api.pathing.goals.Goal");
-            logFollow("Using Goal interface.");
-        } catch (ClassNotFoundException e) {
-            goalIface = Class.forName("baritone.api.pathing.goals.IGoal");
-            logFollow("Using IGoal interface.");
-        }
-        Class<?> goalBlock = Class.forName("baritone.api.pathing.goals.GoalBlock");
+        try { goalIface = Class.forName("baritone.api.pathing.goals.Goal"); }
+        catch (ClassNotFoundException e) { goalIface = Class.forName("baritone.api.pathing.goals.IGoal"); }
 
-        // Support both GoalBlock(BlockPos) and GoalBlock(int,int,int)
-        Object goal;
-        try {
-            goal = goalBlock.getConstructor(BlockPos.class).newInstance(goalPos);
-            logFollow("Constructed GoalBlock via BlockPos constructor.");
-        } catch (NoSuchMethodException ex) {
-            goal = goalBlock.getConstructor(int.class, int.class, int.class)
-                .newInstance(goalPos.getX(), goalPos.getY(), goalPos.getZ());
-            logFollow("Constructed GoalBlock via int,int,int constructor.");
-        }
-
-        // Prefer setGoalAndPath if present; otherwise try setGoal + path
+        // Prefer GoalXZ
+        Class<?> goalXZ = Class.forName("baritone.api.pathing.goals.GoalXZ");
+        Object goal = goalXZ.getConstructor(int.class, int.class).newInstance(x, z);
         try {
             goalProcess.getClass().getMethod("setGoalAndPath", goalIface).invoke(goalProcess, goal);
-            logFollow("Called setGoalAndPath.");
         } catch (NoSuchMethodException e) {
-            // setGoal(...) then path() on PathingBehavior
             goalProcess.getClass().getMethod("setGoal", goalIface).invoke(goalProcess, goal);
-            logFollow("Called setGoal(...) as fallback.");
-            try {
-                goalProcess.getClass().getMethod("path").invoke(goalProcess);
-                logFollow("Called path() after setGoal.");
-            } catch (NoSuchMethodException ignored) {
-                // Some versions path automatically on setGoal
-                logFollow("No path() method; assuming automatic pathing.");
-            }
+            try { goalProcess.getClass().getMethod("path").invoke(goalProcess); } catch (NoSuchMethodException ignored) {}
         }
     }
 
