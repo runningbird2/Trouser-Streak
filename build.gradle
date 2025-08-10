@@ -48,6 +48,10 @@ dependencies {
     } else {
         logger.lifecycle("[dev] Baritone jar not found in libs/. Expected baritone-fabric-1.14.0.jar or baritone-api-fabric-1.14.0.jar")
     }
+
+    // Test
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
 }
 
 processResources {
@@ -63,4 +67,8 @@ processResources {
 
 tasks.withType(JavaCompile).configureEach {
     it.options.encoding("UTF-8")
+}
+
+test {
+    useJUnitPlatform()
 }
