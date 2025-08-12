@@ -9,3 +9,6 @@ Updates based on clarifications:
 Notes:
 - Backtrack detection uses an apex + heading projection; the apex resets on forward progress so the limit always reflects the last forward advance.
 - The heading for backtrack is the chosen branch heading, falling back to trend heading from recent movement when needed.
+
+
+Adds a HUD element: ChunkFollowStatsHud. Find it under Meteor HUD as 'chunk-follow-stats' and place/scale it as needed.

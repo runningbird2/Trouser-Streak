@@ -311,6 +311,7 @@ public class NewerNewChunks extends Module {
     private static final int CHUNK_HISTORY_SIZE = 4096;
     private static final long OSCILLATION_WINDOW_MS = 15_000L;
     private final Deque<ChunkVisit> chunkHistory = new ArrayDeque<>();
+    private long lastOscillationAt = 0L;
     private ChunkPos lastPlayerChunk = null;
     // DFS-style exploration state for multi-branch trails
     private final Deque<ChunkPos> pathStack = new ArrayDeque<>();
@@ -691,6 +692,7 @@ public class NewerNewChunks extends Module {
                 if (autoFollow.get()) updateDirectionalBacktrack(now);
                 // Check for ABAB oscillation within a short window
                 if (detectOscillation()) {
+                    lastOscillationAt = System.currentTimeMillis();
                     logFollow("Detected oscillation between chunks. Cancelling and logging out.");
                     try { baritoneCancel(); } catch (Throwable ignored) {}
                     if (logoutOnTrailEnd.get()) try { logoutClient("Oscillation detected at trail end"); } catch (Throwable ignored) {}
@@ -1744,5 +1746,7 @@ public class NewerNewChunks extends Module {
         if (poolRef == null) return 0;
         synchronized (poolRef) { return poolRef.size(); }
     }
+    public boolean hudOscillating() { return (System.currentTimeMillis() - lastOscillationAt) <= OSCILLATION_WINDOW_MS; }
+    public boolean hudAutoFollowEnabled() { return autoFollow.get(); }
 
 }

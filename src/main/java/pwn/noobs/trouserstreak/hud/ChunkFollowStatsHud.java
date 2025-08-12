@@ -65,7 +65,7 @@ public class ChunkFollowStatsHud extends HudElement {
     public void render(HudRenderer renderer) {
         NewerNewChunks mod = Modules.get().get(NewerNewChunks.class);
         if (mod == null) {
-            drawLines(renderer, List.of("NewerNewChunks not loaded"));
+            drawLines(renderer, List.of(new HUDLine("NewerNewChunks not loaded", Color.WHITE)));
             return;
         }
 
@@ -83,26 +83,31 @@ public class ChunkFollowStatsHud extends HudElement {
         int limit = mod.hudBacktrackLimit();
         int pool = mod.hudPoolSize();
 
-        List<String> lines = new ArrayList<>();
-        lines.add("Follow: " + followType + " (pool=" + pool + ")");
-        lines.add("Target: " + targetStr);
-        lines.add("Heading: " + headStr);
-        lines.add("Apex: " + apexStr);
-        lines.add("Retraced: " + retraced + "/" + limit + " chunks");
-        lines.add("Gap: " + gap + " chunks");
+        List<HUDLine> lines = new ArrayList<>();
+        lines.add(new HUDLine("Follow: " + followType + " (pool=" + pool + ")", Color.WHITE));
+        lines.add(new HUDLine("Target: " + targetStr, Color.WHITE));
+        lines.add(new HUDLine("Heading: " + headStr, Color.WHITE));
+        lines.add(new HUDLine("Apex: " + apexStr, Color.WHITE));
+        // Retraced coloring: green when 0, yellow mid, red at/over limit
+        Color retracedColor = retraced <= 0 ? Color.GREEN : (retraced >= limit ? Color.RED : Color.YELLOW);
+        lines.add(new HUDLine("Retraced: " + retraced + "/" + limit + " chunks", retracedColor));
+        lines.add(new HUDLine("Gap: " + gap + " chunks", Color.WHITE));
+        // Oscillation indicator
+        boolean oscillating = mod.hudOscillating();
+        lines.add(new HUDLine("Oscillation: " + (oscillating ? "YES" : "no"), oscillating ? Color.RED : Color.WHITE));
 
         drawLines(renderer, lines);
     }
 
-    private void drawLines(HudRenderer renderer, List<String> lines) {
+    private void drawLines(HudRenderer renderer, List<HUDLine> lines) {
         double sx = x;
         double sy = y;
         double w = 0;
         double h = 0;
 
         // Measure
-        for (String s : lines) {
-            double tw = renderer.textWidth(s, true, scale.get());
+        for (HUDLine line : lines) {
+            double tw = renderer.textWidth(line.text, true, scale.get());
             w = Math.max(w, tw);
             h += renderer.textHeight(true, scale.get());
         }
@@ -111,10 +116,14 @@ public class ChunkFollowStatsHud extends HudElement {
         if (background.get()) renderer.quad(sx, sy, getWidth(), getHeight(), backgroundColor.get());
 
         double cy = sy + 2;
-        for (String s : lines) {
-            renderer.text(s, sx + 2, cy, Color.WHITE, true, scale.get());
+        for (HUDLine line : lines) {
+            renderer.text(line.text, sx + 2, cy, line.color, true, scale.get());
             cy += renderer.textHeight(true, scale.get());
         }
     }
-}
 
+    private static final class HUDLine {
+        final String text; final Color color;
+        HUDLine(String t, Color c) { text = t; color = c; }
+    }
+}
