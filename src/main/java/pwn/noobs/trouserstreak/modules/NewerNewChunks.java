@@ -1174,11 +1174,25 @@ public class NewerNewChunks extends Module {
         chunkSet.removeIf(c -> !playerPos.isWithinDistance(new BlockPos(c.getCenterX(), renderHeight.get(), c.getCenterZ()), renderDistanceBlocks));
     }
 
+    // Cached Baritone availability to avoid repeated reflection every tick
+    private boolean baritonePresentCached = false;
+    private long lastBaritoneCheck = 0L;
+    private static final long BARITONE_CHECK_INTERVAL_MS = 1000L;
+
+    private boolean baritoneAvailableCached() {
+        long now = System.currentTimeMillis();
+        if (now - lastBaritoneCheck > BARITONE_CHECK_INTERVAL_MS) {
+            baritonePresentCached = baritoneAvailable();
+            lastBaritoneCheck = now;
+        }
+        return baritonePresentCached;
+    }
+
     // --- Auto-follow implementation ---
     private void updateAutoFollow() {
         if (mc == null || mc.player == null || mc.world == null) return;
         // Ensure Baritone is available before doing any goal work
-        if (!baritoneAvailable()) {
+        if (!baritoneAvailableCached()) {
             if (!baritoneWarned) {
                 logFollow("Baritone not detected. Enable Baritone to use auto-follow.");
                 baritoneWarned = true;
@@ -1188,19 +1202,14 @@ public class NewerNewChunks extends Module {
             // Reset once Baritone is detected again
             baritoneWarned = false;
         }
-        // Resolve candidate set
-        Set<ChunkPos> poolRef = getPoolForFollowType();
-        if (poolRef == null || poolRef.isEmpty()) {
+        // Resolve candidate membership without cloning large sets every tick
+        java.util.function.Predicate<ChunkPos> inPool = membershipForFollowType();
+        if (inPool == null || isPoolEmptyForFollowType()) {
             logFollowOnce("No chunks available to follow for " + followType.get() + ".");
             // Stop navigating and logout if configured
             try { baritoneCancel(); } catch (Throwable ignored) {}
             if (logoutOnNoTargets.get()) try { logoutClient("No target chunks detected for " + followType.get()); } catch (Throwable ignored) {}
             return;
-        }
-        Set<ChunkPos> pool;
-        // Create a snapshot to avoid concurrent modification
-        synchronized (poolRef) {
-            pool = new HashSet<>(poolRef);
         }
 
         ChunkPos playerChunk = new ChunkPos(mc.player.getBlockX() >> 4, mc.player.getBlockZ() >> 4);
@@ -1217,7 +1226,7 @@ public class NewerNewChunks extends Module {
         // Pick a new target only when none is active; guided by recent trend and never backtrack
         if (currentTarget == null) {
             Direction trend = trendHeadingFromHistory();
-            NextChoice choice = chooseNextAlongTrail(playerChunk, pool, lookAhead.get(), trend != null ? trend : lastHeading);
+            NextChoice choice = chooseNextAlongTrail(playerChunk, inPool, lookAhead.get(), trend != null ? trend : lastHeading);
             if (choice == null) {
                 logFollow("Trail ended in allowed direction(s). Cancelling and logging out.");
                 // Record apex at trail end for HUD: where we are now
@@ -1280,9 +1289,46 @@ public class NewerNewChunks extends Module {
         return null;
     }
 
+    // Lightweight membership predicates to avoid cloning sets each tick
+    private java.util.function.Predicate<ChunkPos> membershipForFollowType() {
+        switch (followType.get()) {
+            case New: return c -> { synchronized (newChunks) { return newChunks.contains(c); } };
+            case Old: return c -> { synchronized (oldChunks) { return oldChunks.contains(c); } };
+            case BeingUpdated: return c -> { synchronized (beingUpdatedOldChunks) { return beingUpdatedOldChunks.contains(c); } };
+            case OldGeneration: return c -> { synchronized (OldGenerationOldChunks) { return OldGenerationOldChunks.contains(c); } };
+            case BlockExploit: return c -> { synchronized (tickexploitChunks) { return tickexploitChunks.contains(c); } };
+            case NotNew:
+                return c -> {
+                    synchronized (oldChunks) { if (oldChunks.contains(c)) return true; }
+                    synchronized (beingUpdatedOldChunks) { if (beingUpdatedOldChunks.contains(c)) return true; }
+                    synchronized (OldGenerationOldChunks) { if (OldGenerationOldChunks.contains(c)) return true; }
+                    synchronized (tickexploitChunks) { if (tickexploitChunks.contains(c)) return true; }
+                    return false;
+                };
+        }
+        return null;
+    }
+
+    private boolean isPoolEmptyForFollowType() {
+        switch (followType.get()) {
+            case New: synchronized (newChunks) { return newChunks.isEmpty(); }
+            case Old: synchronized (oldChunks) { return oldChunks.isEmpty(); }
+            case BeingUpdated: synchronized (beingUpdatedOldChunks) { return beingUpdatedOldChunks.isEmpty(); }
+            case OldGeneration: synchronized (OldGenerationOldChunks) { return OldGenerationOldChunks.isEmpty(); }
+            case BlockExploit: synchronized (tickexploitChunks) { return tickexploitChunks.isEmpty(); }
+            case NotNew:
+                synchronized (oldChunks) { if (!oldChunks.isEmpty()) return false; }
+                synchronized (beingUpdatedOldChunks) { if (!beingUpdatedOldChunks.isEmpty()) return false; }
+                synchronized (OldGenerationOldChunks) { if (!OldGenerationOldChunks.isEmpty()) return false; }
+                synchronized (tickexploitChunks) { if (!tickexploitChunks.isEmpty()) return false; }
+                return true;
+        }
+        return true;
+    }
+
     // Choose next along trail using relative heading, never going backwards; allows left/right turns
     // Enforces that every intermediate step stays forward-or-lateral relative to the initial heading from 'start'.
-    private NextChoice chooseNextAlongTrail(ChunkPos start, Set<ChunkPos> pool, int ahead, Direction heading) {
+    private NextChoice chooseNextAlongTrail(ChunkPos start, java.util.function.Predicate<ChunkPos> inPool, int ahead, Direction heading) {
         int need = Math.max(1, ahead);
         // Build ordered directions to try: current heading, then left, then right.
         // If unknown, derive from player's look and EXCLUDE the opposite/backwards direction.
@@ -1298,31 +1344,31 @@ public class NewerNewChunks extends Module {
             if (dir == null) continue;
             ChunkPos first = new ChunkPos(start.x + dir.getOffsetX(), start.z + dir.getOffsetZ());
             // Require candidate to be in pool and not behind relative to the initial heading from 'start'
-            if (!pool.contains(first)) continue;
+            if (!inPool.test(first)) continue;
             if (!isForwardOrLateral(start, first, dir)) continue;
             if (need <= 1) return new NextChoice(first, dir);
-            ChunkPos end = walkTrailRelative(start, first, pool, need - 1, dir);
+            ChunkPos end = walkTrailRelative(start, first, inPool, need - 1, dir);
             if (end != null) return new NextChoice(end, dir);
         }
         return null;
     }
 
     // Walk forward up to 'steps' steps, allowing left/right turns, but never moving behind relative to the initial heading from 'originStart'.
-    private ChunkPos walkTrailRelative(ChunkPos originStart, ChunkPos start, Set<ChunkPos> pool, int steps, Direction heading) {
+    private ChunkPos walkTrailRelative(ChunkPos originStart, ChunkPos start, java.util.function.Predicate<ChunkPos> inPool, int steps, Direction heading) {
         ChunkPos current = start;
         Direction dir = heading;
         int advanced = 0;
         while (advanced < steps) {
             // straight
             ChunkPos straight = new ChunkPos(current.x + dir.getOffsetX(), current.z + dir.getOffsetZ());
-            if (pool.contains(straight) && isForwardOrLateral(originStart, straight, heading)) { current = straight; advanced++; continue; }
+            if (inPool.test(straight) && isForwardOrLateral(originStart, straight, heading)) { current = straight; advanced++; continue; }
             // try lateral (left then right)
             boolean moved = false;
             for (Direction turn : new Direction[]{leftOf(dir), rightOf(dir)}) {
                 if (turn == null) continue;
                 ChunkPos next = new ChunkPos(current.x + turn.getOffsetX(), current.z + turn.getOffsetZ());
                 // Keep projection non-negative along the original heading from originStart
-                if (pool.contains(next) && isForwardOrLateral(originStart, next, heading)) { current = next; dir = turn; advanced++; moved = true; break; }
+                if (inPool.test(next) && isForwardOrLateral(originStart, next, heading)) { current = next; dir = turn; advanced++; moved = true; break; }
             }
             if (!moved) break;
         }
