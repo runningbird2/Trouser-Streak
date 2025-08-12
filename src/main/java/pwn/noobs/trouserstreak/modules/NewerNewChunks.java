@@ -321,7 +321,8 @@ public class NewerNewChunks extends Module {
     private Direction backtrackDir = null; // direction of retrace movement away from apex
     private int retracedChunks = 0;
     // Recent chunk history for trend + oscillation detection
-    private static final int CHUNK_HISTORY_SIZE = 8;
+    // Slightly larger history to infer better heading/trend and avoid mis-starts
+    private static final int CHUNK_HISTORY_SIZE = 16;
     private static final long OSCILLATION_WINDOW_MS = 15_000L;
     private final Deque<ChunkVisit> chunkHistory = new ArrayDeque<>();
     private ChunkPos lastPlayerChunk = null;
@@ -1240,49 +1241,54 @@ public class NewerNewChunks extends Module {
             currentTarget = null;
         }
 
-        // Pick a new target only when none is active; guided by recent trend and never backtrack
-        if (currentTarget == null) {
-            Direction trend = trendHeadingFromHistory();
-            NextChoice choice = chooseNextAlongTrail(playerChunk, inPool, lookAhead.get(), trend != null ? trend : lastHeading);
-            if (choice == null) {
-                logFollow("Trail ended in allowed direction(s). Cancelling and logging out.");
-                // Record apex at trail end for HUD: where we are now
-                backtrackApex = playerChunk;
-                backtrackDir = lastHeading != null ? lastHeading.getOpposite() : null;
-                retracedChunks = 0;
-                try { baritoneCancel(); } catch (Throwable ignored) {}
-                if (logoutOnTrailEnd.get()) try { logoutClient("Trail ended for " + followType.get()); } catch (Throwable ignored) {}
-                return;
-            }
-            // If the choice would immediately backtrack to the previous chunk, treat as oscillation/trail end
-            ChunkPos prev = previousVisitedChunk();
-            if (prev != null && lastPlayerChunk != null && choice.chunk.equals(prev)) {
-                logFollow("Backtracking detected towards previous chunk. Cancelling and logging out.");
-                // Record apex as the current position before backtracking
-                backtrackApex = playerChunk;
-                backtrackDir = lastHeading != null ? lastHeading.getOpposite() : null;
-                retracedChunks = 0;
-                try { baritoneCancel(); } catch (Throwable ignored) {}
-                if (logoutOnTrailEnd.get()) try { logoutClient("Backtracking detected at trail end"); } catch (Throwable ignored) {}
-                return;
-            }
-            // Detect a true backtrack (reversing heading). If so, set apex to the chunk where we started retracing.
+        // Always (re)compute the best next target based on newly explored chunks,
+        // so we can extend the goal ahead and avoid stalls at chunk boundaries.
+        Direction trend = trendHeadingFromHistory();
+        NextChoice choice = chooseNextAlongTrail(playerChunk, inPool, lookAhead.get(), trend != null ? trend : lastHeading);
+
+        if (choice == null) {
+            // No forward/lateral continuation exists from current position
+            logFollow("Trail ended in allowed direction(s). Cancelling and logging out.");
+            backtrackApex = playerChunk;
+            backtrackDir = lastHeading != null ? lastHeading.getOpposite() : null;
+            retracedChunks = 0;
+            try { baritoneCancel(); } catch (Throwable ignored) {}
+            if (logoutOnTrailEnd.get()) try { logoutClient("Trail ended for " + followType.get()); } catch (Throwable ignored) {}
+            return;
+        }
+
+        // If the choice would immediately backtrack to the previous chunk, treat as oscillation/trail end
+        ChunkPos prev = previousVisitedChunk();
+        if (prev != null && lastPlayerChunk != null && choice.chunk.equals(prev)) {
+            logFollow("Backtracking detected towards previous chunk. Cancelling and logging out.");
+            backtrackApex = playerChunk;
+            backtrackDir = lastHeading != null ? lastHeading.getOpposite() : null;
+            retracedChunks = 0;
+            try { baritoneCancel(); } catch (Throwable ignored) {}
+            if (logoutOnTrailEnd.get()) try { logoutClient("Backtracking detected at trail end"); } catch (Throwable ignored) {}
+            return;
+        }
+
+        // If we have no target yet, or our best target advanced due to exploration, update goal.
+        boolean needUpdate = (currentTarget == null) || !choice.chunk.equals(currentTarget);
+        // Throttle re-issuing Baritone goals to avoid spam
+        long nowMs = System.currentTimeMillis();
+        if (needUpdate && (nowMs - lastSetGoalTime) >= 350) {
             Direction oldHeading = lastHeading;
             currentTarget = choice.chunk;
-            lastHeading = choice.heading; // update our heading to the chosen first step
+            lastHeading = choice.heading;
             if (oldHeading != null && lastHeading != null && lastHeading == oldHeading.getOpposite()) {
                 backtrackApex = playerChunk;
-                backtrackDir = lastHeading; // moving away from apex in this direction
+                backtrackDir = lastHeading;
                 retracedChunks = 0;
             } else if (oldHeading != null && lastHeading != null && lastHeading != oldHeading) {
-                // On turns, clear previous backtrack info
                 backtrackApex = null;
                 backtrackDir = null;
                 retracedChunks = 0;
             }
-            logFollow("New target chunk " + currentTarget.x + "," + currentTarget.z + " heading=" + lastHeading + ".");
+            logFollow("Target updated to " + currentTarget.x + "," + currentTarget.z + " heading=" + lastHeading + ".");
             setGoalForChunk(currentTarget);
-            lastSetGoalTime = System.currentTimeMillis();
+            lastSetGoalTime = nowMs;
         }
     }
 
