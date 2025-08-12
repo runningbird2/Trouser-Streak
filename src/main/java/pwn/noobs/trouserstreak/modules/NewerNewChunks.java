@@ -485,6 +485,14 @@ public class NewerNewChunks extends Module {
         .defaultValue(true)
         .build()
     );
+    private final Setting<Integer> followUpdateIntervalTicks = sgFollow.add(new IntSetting.Builder()
+        .name("follow-interval-ticks")
+        .description("Process auto-follow every N ticks (20 ticks = 1 second).")
+        .defaultValue(5)
+        .min(1)
+        .sliderRange(1, 20)
+        .build()
+    );
     private final Setting<Boolean> logoutOnNoTargets = sgFollow.add(new BoolSetting.Builder()
         .name("logout-when-empty")
         .description("Logout when no chunks of the chosen type are detected.")
@@ -709,8 +717,14 @@ public class NewerNewChunks extends Module {
             }
         }
 
-		// Auto-follow tick
+		// Auto-follow tick (throttled)
         if (autoFollow.get()) {
+            // Throttle: process only every N ticks
+            followTickCounter++;
+            int interval = Math.max(1, followUpdateIntervalTicks.get());
+            if (followTickCounter < interval) return;
+            followTickCounter = 0;
+
             if (!baritoneAvailable()) {
                 if (!baritoneWarned) { info("Baritone not found. Auto-follow will not path."); baritoneWarned = true; }
                 return;
@@ -1173,6 +1187,9 @@ public class NewerNewChunks extends Module {
     private void removeChunksOutsideRenderDistance(Set<ChunkPos> chunkSet, BlockPos playerPos, double renderDistanceBlocks) {
         chunkSet.removeIf(c -> !playerPos.isWithinDistance(new BlockPos(c.getCenterX(), renderHeight.get(), c.getCenterZ()), renderDistanceBlocks));
     }
+
+    // Throttle counter for auto-follow updates (ticks)
+    private int followTickCounter = 0;
 
     // Cached Baritone availability to avoid repeated reflection every tick
     private boolean baritonePresentCached = false;
