@@ -14,6 +14,9 @@ import meteordevelopment.meteorclient.gui.widgets.pressable.WButton;
 import meteordevelopment.meteorclient.renderer.ShapeMode;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
+import meteordevelopment.meteorclient.systems.modules.Modules;
+import meteordevelopment.meteorclient.systems.modules.movement.GUIMove;
+import meteordevelopment.meteorclient.utils.misc.input.KeyAction;
 import meteordevelopment.meteorclient.utils.render.color.Color;
 import meteordevelopment.meteorclient.utils.render.color.SettingColor;
 import meteordevelopment.orbit.EventHandler;
@@ -704,14 +707,18 @@ public class NewerNewChunks extends Module {
     private void onKeyEvent(KeyEvent event) {
         if (!pauseOnInput.get()) return;
         if (mc == null || mc.player == null) return;
-        // Ignore UI/screens (including Meteor ClickGUI and HUD editor)
-        if (mc.currentScreen != null) return;
-        // If any movement/interaction key is currently pressed, pause auto-follow
-        if (mc.options.forwardKey.isPressed() || mc.options.backKey.isPressed() ||
-            mc.options.leftKey.isPressed() || mc.options.rightKey.isPressed() ||
-            mc.options.sneakKey.isPressed() || mc.options.jumpKey.isPressed() ||
-            mc.options.sprintKey.isPressed() || mc.options.attackKey.isPressed() ||
-            mc.options.useKey.isPressed()) {
+
+        // Follow Meteor AutoWalk behavior: if a GUI is open, only treat input as movement
+        // when GUIMove is active and not skipping (i.e., not typing in text boxes, etc.).
+        if (mc.currentScreen != null) {
+            GUIMove guiMove = Modules.get().get(GUIMove.class);
+            if (!guiMove.isActive()) return;   // ignore inputs while in GUI when GUIMove is off
+            if (guiMove.skip()) return;        // ignore inputs while typing/searching in GUI
+        }
+
+        // Disable on movement/interaction key press
+        if (event.action == KeyAction.Press && (isMovementKey(event.key) ||
+            mc.options.attackKey.matchesKey(event.key, 0) || mc.options.useKey.matchesKey(event.key, 0))) {
             disableAutoFollowDueToInput();
         }
     }
@@ -720,10 +727,17 @@ public class NewerNewChunks extends Module {
     private void onMouseButton(MouseButtonEvent event) {
         if (!pauseOnInput.get()) return;
         if (mc == null || mc.player == null) return;
-        // Ignore UI/screens (including Meteor ClickGUI and HUD editor)
-        if (mc.currentScreen != null) return;
-        // If attack/use are currently pressed, pause auto-follow
-        if (mc.options.attackKey.isPressed() || mc.options.useKey.isPressed()) {
+
+        // Follow Meteor AutoWalk behavior inside GUIs
+        if (mc.currentScreen != null) {
+            GUIMove guiMove = Modules.get().get(GUIMove.class);
+            if (!guiMove.isActive()) return;
+            if (guiMove.skip()) return;
+        }
+
+        // Disable on movement/interaction mouse button press
+        if (event.action == KeyAction.Press && (isMovementButton(event.button) ||
+            mc.options.attackKey.matchesMouse(event.button) || mc.options.useKey.matchesMouse(event.button))) {
             disableAutoFollowDueToInput();
         }
     }
