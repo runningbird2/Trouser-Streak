@@ -56,6 +56,13 @@ public class ChunkFollowStatsHud extends HudElement {
         .build()
     );
 
+    private final Setting<Boolean> hideWhenDisabled = sgGeneral.add(new BoolSetting.Builder()
+        .name("hide-when-disabled")
+        .description("Hide all lines when auto-follow is disabled.")
+        .defaultValue(true)
+        .build()
+    );
+
     public ChunkFollowStatsHud() {
         super(INFO);
         setSize(140, 72);
@@ -66,6 +73,17 @@ public class ChunkFollowStatsHud extends HudElement {
         NewerNewChunks mod = Modules.get().get(NewerNewChunks.class);
         if (mod == null) {
             drawLines(renderer, List.of(new HUDLine("NewerNewChunks not loaded", Color.WHITE)));
+            return;
+        }
+
+        // Hide when auto-follow disabled (optional)
+        if (hideWhenDisabled.get() && !mod.hudAutoFollowEnabled()) {
+            // Keep a small placeholder in editor for positioning
+            if (isInEditor()) {
+                drawLines(renderer, List.of(new HUDLine("chunk-follow-stats (hidden)", Color.GRAY)));
+            } else {
+                setSize(60, 12);
+            }
             return;
         }
 
