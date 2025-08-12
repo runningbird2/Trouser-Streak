@@ -316,6 +316,10 @@ public class NewerNewChunks extends Module {
     private static final long BACKTRACK_COOLDOWN_MS = 4000L;
     // Dynamic heading that updates as we progress; used to forbid backwards moves
     private Direction lastHeading = null;
+    // Backtrack apex tracking for HUD
+    private ChunkPos backtrackApex = null;
+    private Direction backtrackDir = null; // direction of retrace movement away from apex
+    private int retracedChunks = 0;
     // Recent chunk history for trend + oscillation detection
     private static final int CHUNK_HISTORY_SIZE = 8;
     private static final long OSCILLATION_WINDOW_MS = 15_000L;
@@ -683,6 +687,19 @@ public class NewerNewChunks extends Module {
             if (!now.equals(lastPlayerChunk)) {
                 lastPlayerChunk = now;
                 pushChunkVisit(now);
+                // Update retrace count relative to apex when present
+                if (backtrackApex != null && backtrackDir != null) {
+                    int dx = now.x - backtrackApex.x;
+                    int dz = now.z - backtrackApex.z;
+                    int dot = dx * backtrackDir.getOffsetX() + dz * backtrackDir.getOffsetZ();
+                    retracedChunks = Math.max(0, dot);
+                    // If we moved to or past the apex in the opposite direction, clear apex
+                    if (dot <= 0) {
+                        backtrackApex = null;
+                        backtrackDir = null;
+                        retracedChunks = 0;
+                    }
+                }
                 // Check for ABAB oscillation within a short window
                 if (detectOscillation()) {
                     logFollow("Detected oscillation between chunks. Cancelling and logging out.");
@@ -1203,6 +1220,10 @@ public class NewerNewChunks extends Module {
             NextChoice choice = chooseNextAlongTrail(playerChunk, pool, lookAhead.get(), trend != null ? trend : lastHeading);
             if (choice == null) {
                 logFollow("Trail ended in allowed direction(s). Cancelling and logging out.");
+                // Record apex at trail end for HUD: where we are now
+                backtrackApex = playerChunk;
+                backtrackDir = lastHeading != null ? lastHeading.getOpposite() : null;
+                retracedChunks = 0;
                 try { baritoneCancel(); } catch (Throwable ignored) {}
                 if (logoutOnTrailEnd.get()) try { logoutClient("Trail ended for " + followType.get()); } catch (Throwable ignored) {}
                 return;
@@ -1211,12 +1232,28 @@ public class NewerNewChunks extends Module {
             ChunkPos prev = previousVisitedChunk();
             if (prev != null && lastPlayerChunk != null && choice.chunk.equals(prev)) {
                 logFollow("Backtracking detected towards previous chunk. Cancelling and logging out.");
+                // Record apex as the current position before backtracking
+                backtrackApex = playerChunk;
+                backtrackDir = lastHeading != null ? lastHeading.getOpposite() : null;
+                retracedChunks = 0;
                 try { baritoneCancel(); } catch (Throwable ignored) {}
                 if (logoutOnTrailEnd.get()) try { logoutClient("Backtracking detected at trail end"); } catch (Throwable ignored) {}
                 return;
             }
+            // Detect a true backtrack (reversing heading). If so, set apex to the chunk where we started retracing.
+            Direction oldHeading = lastHeading;
             currentTarget = choice.chunk;
             lastHeading = choice.heading; // update our heading to the chosen first step
+            if (oldHeading != null && lastHeading != null && lastHeading == oldHeading.getOpposite()) {
+                backtrackApex = playerChunk;
+                backtrackDir = lastHeading; // moving away from apex in this direction
+                retracedChunks = 0;
+            } else if (oldHeading != null && lastHeading != null && lastHeading != oldHeading) {
+                // On turns, clear previous backtrack info
+                backtrackApex = null;
+                backtrackDir = null;
+                retracedChunks = 0;
+            }
             logFollow("New target chunk " + currentTarget.x + "," + currentTarget.z + " heading=" + lastHeading + ".");
             setGoalForChunk(currentTarget);
             lastSetGoalTime = System.currentTimeMillis();
@@ -1566,10 +1603,10 @@ public class NewerNewChunks extends Module {
     public FollowType hudFollowType() { return followType.get(); }
     public ChunkPos hudCurrentTarget() { return currentTarget; }
     public Direction hudHeading() { return lastHeading; }
-    public ChunkPos hudBacktrackApex() { return null; }
+    public ChunkPos hudBacktrackApex() { return backtrackApex; }
     public int hudGapAllowance() { return maxGap.get(); }
     public int hudBacktrackLimit() { return 65; }
-    public int hudRetracedChunks() { return 0; }
+    public int hudRetracedChunks() { return Math.max(0, retracedChunks); }
     public int hudPoolSize() {
         Set<ChunkPos> poolRef = getPoolForFollowType();
         if (poolRef == null) return 0;
