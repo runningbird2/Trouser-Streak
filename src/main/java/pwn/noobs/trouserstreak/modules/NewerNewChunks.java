@@ -1721,4 +1721,28 @@ public class NewerNewChunks extends Module {
         info("[Follow] " + msg);
     }
 
+    // --- HUD getters ---
+    public FollowType hudFollowType() { return followType.get(); }
+    public ChunkPos hudCurrentTarget() { return currentTarget; }
+    public Direction hudHeading() { return lastHeading; }
+    public ChunkPos hudBacktrackApex() { return backtrackApex; }
+    public int hudGapAllowance() { return maxGap.get(); }
+    public int hudBacktrackLimit() { return backtrackLimit.get(); }
+    public int hudRetracedChunks() {
+        if (mc == null || mc.player == null) return 0;
+        if (backtrackApex == null || backtrackHeading == null) return backtrackedSteps;
+        ChunkPos now = new ChunkPos(mc.player.getBlockX() >> 4, mc.player.getBlockZ() >> 4);
+        int hx = backtrackHeading.getOffsetX();
+        int hz = backtrackHeading.getOffsetZ();
+        int dx = now.x - backtrackApex.x;
+        int dz = now.z - backtrackApex.z;
+        int projection = dx * hx + dz * hz;
+        return Math.max(0, -projection);
+    }
+    public int hudPoolSize() {
+        Set<ChunkPos> poolRef = getPoolForFollowType();
+        if (poolRef == null) return 0;
+        synchronized (poolRef) { return poolRef.size(); }
+    }
+
 }
