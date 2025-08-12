@@ -6,7 +6,7 @@
 - If coordination is needed, open a PR only on the `origin` repository; never to upstream without confirmation.
 
 ## Branching & Pushing
-- Update existing branches directly when appropriate (e.g., `1.21.5`).
+- Update existing branches directly when appropriate (assume, `1.21.5`).
 - For isolated work, create a feature branch on origin: `git checkout -b feat/<topic> <base>` and `git push -u origin feat/<topic>`.
 - Commit with clear messages: `git add -A && git commit -m "<scope>: <summary>"`.
 
