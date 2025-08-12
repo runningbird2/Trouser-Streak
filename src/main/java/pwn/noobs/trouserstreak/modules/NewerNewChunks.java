@@ -1481,10 +1481,17 @@ public class NewerNewChunks extends Module {
                 return;
             }
         } catch (Throwable ignored) {}
-        // Singleplayer or unknown: try world disconnect
+        // Singleplayer or unknown: try world disconnect (handle signature differences across versions)
         try {
             if (mc.world != null) {
-                mc.world.disconnect(Text.of("[NewerNewChunks] " + reason));
+                try {
+                    // Newer mappings: disconnect(Text) via reflection
+                    mc.world.getClass().getMethod("disconnect", Text.class)
+                        .invoke(mc.world, Text.of("[NewerNewChunks] " + reason));
+                } catch (Throwable t) {
+                    // Older mappings: disconnect() via reflection
+                    try { mc.world.getClass().getMethod("disconnect").invoke(mc.world); } catch (Throwable ignored2) {}
+                }
             }
         } catch (Throwable ignored) {}
     }
