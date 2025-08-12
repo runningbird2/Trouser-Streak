@@ -307,14 +307,20 @@ public class NewerNewChunks extends Module {
     // Dynamic heading that updates as we progress; used to forbid backwards moves
     private Direction lastHeading = null;
     // Recent chunk history for trend + oscillation detection
-    private static final int CHUNK_HISTORY_SIZE = 8;
+    // Large enough to detect long backtracks; we prune by time as well.
+    private static final int CHUNK_HISTORY_SIZE = 4096;
     private static final long OSCILLATION_WINDOW_MS = 15_000L;
     private final Deque<ChunkVisit> chunkHistory = new ArrayDeque<>();
     private ChunkPos lastPlayerChunk = null;
     // DFS-style exploration state for multi-branch trails
     private final Deque<ChunkPos> pathStack = new ArrayDeque<>();
     private final Map<ChunkPos, EnumSet<Direction>> triedDirs = new HashMap<>();
+    // Track tried 8-way rays (including diagonals) per node to avoid reattempting
+    private final Map<ChunkPos, Set<String>> triedRays8 = new HashMap<>();
     private int backtrackedSteps = 0;
+    // Backtrack apex: furthest-forward chunk reached along the current heading
+    private ChunkPos backtrackApex = null;
+    private Direction backtrackHeading = null;
 	private static final Set<Block> ORE_BLOCKS = new HashSet<>();
 	static {
 		ORE_BLOCKS.add(Blocks.COAL_ORE);
@@ -681,6 +687,8 @@ public class NewerNewChunks extends Module {
             if (!now.equals(lastPlayerChunk)) {
                 lastPlayerChunk = now;
                 pushChunkVisit(now, detectTypeForChunk(now));
+                // Update directional backtrack window relative to current forward heading
+                if (autoFollow.get()) updateDirectionalBacktrack(now);
                 // Check for ABAB oscillation within a short window
                 if (detectOscillation()) {
                     logFollow("Detected oscillation between chunks. Cancelling and logging out.");
@@ -1200,6 +1208,9 @@ public class NewerNewChunks extends Module {
             }
             currentTarget = next.chunk;
             lastHeading = next.heading;
+            // Reset directional backtrack reference to current player chunk for the new forward segment
+            backtrackHeading = lastHeading;
+            backtrackApex = playerChunk;
             triedDirs.computeIfAbsent(pathStack.peekLast(), k -> EnumSet.noneOf(Direction.class)).add(next.heading);
             logFollow("Targeting next branch " + currentTarget.x + "," + currentTarget.z + " heading=" + lastHeading + ".");
             setGoalForChunk(currentTarget);
@@ -1249,6 +1260,24 @@ public class NewerNewChunks extends Module {
             }
             tried.add(d);
         }
+        // Try diagonal straight-line rays if cardinal search failed
+        int[][] diag = new int[][] { {1,1}, {1,-1}, {-1,1}, {-1,-1} };
+        // Order diagonals by their alignment with bias (if any)
+        if (bias != null) {
+            Arrays.sort(diag, (u, v) -> Integer.compare(rayRank(bias, v[0], v[1]), rayRank(bias, u[0], u[1])));
+        }
+        Set<String> tried8 = triedRays8.computeIfAbsent(from, k -> new HashSet<>());
+        for (int[] d : diag) {
+            String key = d[0] + "," + d[1];
+            if (tried8.contains(key)) continue;
+            ChunkPos candidate = findNextWithGap8(from, d[0], d[1], pool, maxGap.get());
+            if (candidate != null) {
+                Direction asCardinal = headingFromVector(d[0], d[1], bias);
+                return new NextChoice(candidate, asCardinal);
+            }
+            tried8.add(key);
+        }
+        triedRays8.remove(from);
         triedDirs.remove(from);
         return null;
     }
@@ -1282,6 +1311,44 @@ public class NewerNewChunks extends Module {
             misses++;
         }
         return null;
+    }
+
+    // 8-way straight-line gap search (supports diagonals)
+    private ChunkPos findNextWithGap8(ChunkPos from, int dx, int dz, Set<ChunkPos> pool, int gap) {
+        int gx = from.x;
+        int gz = from.z;
+        int misses = 0;
+        while (misses <= gap) {
+            gx += dx;
+            gz += dz;
+            ChunkPos cur = new ChunkPos(gx, gz);
+            if (pool.contains(cur)) return cur;
+            misses++;
+        }
+        return null;
+    }
+
+    private Direction headingFromVector(int dx, int dz, Direction bias) {
+        // Convert a diagonal vector to a dominant cardinal heading; prefer bias if tie
+        int ax = Math.abs(dx), az = Math.abs(dz);
+        if (ax > az) return dx >= 0 ? Direction.EAST : Direction.WEST;
+        if (az > ax) return dz >= 0 ? Direction.SOUTH : Direction.NORTH;
+        // tie: pick based on bias alignment if provided
+        if (bias != null) {
+            if (bias == Direction.EAST || bias == Direction.WEST) return dx >= 0 ? Direction.EAST : Direction.WEST;
+            if (bias == Direction.NORTH || bias == Direction.SOUTH) return dz >= 0 ? Direction.SOUTH : Direction.NORTH;
+        }
+        // default: favor X
+        return dx >= 0 ? Direction.EAST : Direction.WEST;
+    }
+
+    private int rayRank(Direction bias, int dx, int dz) {
+        int bx = bias.getOffsetX();
+        int bz = bias.getOffsetZ();
+        // higher dot product = better alignment
+        int dot = bx * dx + bz * dz;
+        // Prefer better alignment (higher rank value returned earlier in sort comparator above)
+        return dot;
     }
 
     // Choose next along trail using relative heading, never going backwards; allows left/right turns
@@ -1489,6 +1556,36 @@ public class NewerNewChunks extends Module {
         ChunkPos D = last4[3].pos;
         // Pattern ABAB where A==C and B==D and A!=B
         return A.equals(C) && B.equals(D) && !A.equals(B);
+    }
+
+    // Maintain an apex chunk along the current forward heading; reset limit after forward progress
+    private void updateDirectionalBacktrack(ChunkPos now) {
+        // Establish or refresh heading context
+        if (backtrackHeading == null) {
+            backtrackHeading = (lastHeading != null) ? lastHeading : trendHeadingFromHistory();
+        }
+        if (backtrackHeading == null) return; // no heading context yet
+        if (backtrackApex == null) backtrackApex = now;
+
+        int hx = backtrackHeading.getOffsetX();
+        int hz = backtrackHeading.getOffsetZ();
+        int dx = now.x - backtrackApex.x;
+        int dz = now.z - backtrackApex.z;
+        int projection = dx * hx + dz * hz; // chunks projected along heading
+        if (projection > 0) {
+            // Forward progress: reset apex and limit
+            backtrackApex = now;
+            backtrackedSteps = 0;
+            return;
+        }
+        if (projection < 0) {
+            int retraced = -projection; // positive chunks backwards
+            if (retraced > backtrackLimit.get()) {
+                logFollow("Backtracked " + retraced + " chunks opposite heading — cancelling.");
+                try { baritoneCancel(); } catch (Throwable ignored) {}
+                if (logoutOnTrailEnd.get()) try { logoutClient("Backtrack limit exceeded"); } catch (Throwable ignored) {}
+            }
+        }
     }
 
     // Compute a coarse trend heading (cardinal) from recent moves
